@@ -1,0 +1,63 @@
+name: 'AVD Security Baseline CD'
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/**'
+      - 'backend/**'
+      - 'terraform/**'
+      - '.github/workflows/release.yml'
+
+jobs:
+  validate-and-scan:
+    name: 'Cyber Security Validation'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: IaC Compliance Scan (Checkov)
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: './terraform'
+        framework: 'terraform'
+
+    - name: Run API Security Tests
+      run: |
+        pip install pytest fastapi httpx
+        pytest tests/
+
+  build-and-push:
+    name: 'Secure Container Release'
+    needs: validate-and-scan
+    runs-on: ubuntu-latest
+    steps:
+    - name: Azure CLI Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Build & Push Security API
+      run: |
+        az acr login --name acrsec
+        docker build -t acrsec.azurecr.io/devopstrio/security-api:${{ github.sha }} ./backend
+        docker push acrsec.azurecr.io/devopstrio/security-api:${{ github.sha }}
+
+  platform-rollout:
+    name: 'Platform Deployment'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+    - name: AKS Set Context
+      uses: azure/aks-set-context@v3
+      with:
+        resource-group: 'rg-avd-security-prd'
+        cluster-name: 'aks-avd-security-prd'
+
+    - name: Helm Rollout
+      run: |
+        helm upgrade --install avd-security ./helm/avd-security-baseline \
+        --namespace avd-security-prod --create-namespace \
+        --set api.image.tag=${{ github.sha }}

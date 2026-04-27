@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-api
+  namespace: avd-security-prod
+  labels:
+    app: security-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: security-api
+  template:
+    metadata:
+      labels:
+        app: security-api
+    spec:
+      containers:
+      - name: gateway
+        image: acrsec.azurecr.io/devopstrio/security-api:v1.2.0
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: sec-secrets
+              key: db-url
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-api-svc
+  namespace: avd-security-prod
+spec:
+  selector:
+    app: security-api
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy-engine
+  namespace: avd-security-prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: policy-engine
+  template:
+    metadata:
+      labels:
+        component: policy-engine
+    spec:
+      containers:
+      - name: engine
+        image: acrsec.azurecr.io/devopstrio/policy-engine:latest
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: security-ingress
+  namespace: avd-security-prod
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - security.devopstrio.co.uk
+    secretName: security-portal-tls
+  rules:
+  - host: security.devopstrio.co.uk
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: security-api-svc
+            port:
+              number: 80
